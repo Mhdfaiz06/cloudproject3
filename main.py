@@ -1,155 +1,146 @@
-from flask import Flask, request, jsonify
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import List, Optional
+from datetime import date
 import uuid
 
-app = Flask(__name__)
+app = FastAPI(title="Student Management API", version="1.0.0")
 
-# In-memory storage
+# In-memory storage (for simplicity)
 students = {}
 classes = {}
-registrations = {}  # class_id -> [student_ids]
+registrations = {}
 
-# 1. Create Student
-@app.route('/students', methods=['POST'])
-def create_student():
-    data = request.json
+# Pydantic Models
+class Student(BaseModel):
+    first_name: str
+    last_name: str
+    middle_name: Optional[str] = None
+    age: int
+    city: str
+
+class StudentUpdate(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    middle_name: Optional[str] = None
+    age: Optional[int] = None
+    city: Optional[str] = None
+
+class Class(BaseModel):
+    class_name: str
+    description: str
+    start_date: date
+    end_date: date
+    number_of_hours: int
+
+class ClassUpdate(BaseModel):
+    class_name: Optional[str] = None
+    description: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    number_of_hours: Optional[int] = None
+
+# Student Operations
+@app.post("/students", status_code=201)
+def create_student(student: Student):
     student_id = str(uuid.uuid4())
-    students[student_id] = {
-        'id': student_id,
-        'first_name': data['first_name'],
-        'last_name': data['last_name'],
-        'middle_name': data.get('middle_name', ''),
-        'age': data['age'],
-        'city': data['city']
-    }
-    return jsonify(students[student_id]), 201
+    students[student_id] = {**student.dict(), "id": student_id}
+    return {"message": "Student created successfully", "student_id": student_id, "student": students[student_id]}
 
-# 2. Update Student
-@app.route('/students/<student_id>', methods=['PUT'])
-def update_student(student_id):
+@app.get("/students")
+def read_students():
+    return {"students": list(students.values())}
+
+@app.put("/students/{student_id}")
+def update_student(student_id: str, student_update: StudentUpdate):
     if student_id not in students:
-        return jsonify({'error': 'Student not found'}), 404
+        raise HTTPException(status_code=404, detail="Student not found")
     
-    data = request.json
-    for key in ['first_name', 'last_name', 'middle_name', 'age', 'city']:
-        if key in data:
-            students[student_id][key] = data[key]
+    student_data = students[student_id]
+    update_data = student_update.dict(exclude_unset=True)
+    student_data.update(update_data)
     
-    return jsonify(students[student_id])
+    return {"message": "Student updated successfully", "student": student_data}
 
-# 3. Delete Student
-@app.route('/students/<student_id>', methods=['DELETE'])
-def delete_student(student_id):
+@app.delete("/students/{student_id}")
+def delete_student(student_id: str):
     if student_id not in students:
-        return jsonify({'error': 'Student not found'}), 404
+        raise HTTPException(status_code=404, detail="Student not found")
     
-    # Remove from all classes
-    for class_id in registrations:
-        if student_id in registrations[class_id]:
-            registrations[class_id].remove(student_id)
-    
-    deleted = students.pop(student_id)
-    return jsonify({'message': 'Student deleted', 'student': deleted})
+    deleted_student = students.pop(student_id)
+    return {"message": "Student deleted successfully", "deleted_student": deleted_student}
 
-# 4. Create Class
-@app.route('/classes', methods=['POST'])
-def create_class():
-    data = request.json
+# Class Operations
+@app.post("/classes", status_code=201)
+def create_class(class_info: Class):
     class_id = str(uuid.uuid4())
-    classes[class_id] = {
-        'id': class_id,
-        'class_name': data['class_name'],
-        'description': data['description'],
-        'start_date': data['start_date'],
-        'end_date': data['end_date'],
-        'number_of_hours': data['number_of_hours']
-    }
+    classes[class_id] = {**class_info.dict(), "id": class_id}
     registrations[class_id] = []
-    return jsonify(classes[class_id]), 201
+    return {"message": "Class created successfully", "class_id": class_id, "class": classes[class_id]}
 
-# 5. Update Class
-@app.route('/classes/<class_id>', methods=['PUT'])
-def update_class(class_id):
-    if class_id not in classes:
-        return jsonify({'error': 'Class not found'}), 404
-    
-    data = request.json
-    for key in ['class_name', 'description', 'start_date', 'end_date', 'number_of_hours']:
-        if key in data:
-            classes[class_id][key] = data[key]
-    
-    return jsonify(classes[class_id])
+@app.get("/classes")
+def get_classes():
+    return {"classes": list(classes.values())}
 
-# 6. Delete Class
-@app.route('/classes/<class_id>', methods=['DELETE'])
-def delete_class(class_id):
+@app.put("/classes/{class_id}")
+def update_class(class_id: str, class_update: ClassUpdate):
     if class_id not in classes:
-        return jsonify({'error': 'Class not found'}), 404
+        raise HTTPException(status_code=404, detail="Class not found")
     
-    deleted = classes.pop(class_id)
+    class_data = classes[class_id]
+    update_data = class_update.dict(exclude_unset=True)
+    
+    # Convert date strings to date objects if needed
+    for key, value in update_data.items():
+        if key in ['start_date', 'end_date'] and isinstance(value, str):
+            update_data[key] = date.fromisoformat(value)
+    
+    class_data.update(update_data)
+    return {"message": "Class updated successfully", "class": class_data}
+
+@app.delete("/classes/{class_id}")
+def delete_class(class_id: str):
+    if class_id not in classes:
+        raise HTTPException(status_code=404, detail="Class not found")
+    
+    deleted_class = classes.pop(class_id)
     registrations.pop(class_id, None)
-    return jsonify({'message': 'Class deleted', 'class': deleted})
+    return {"message": "Class deleted successfully", "deleted_class": deleted_class}
 
-# 7. Register Student to Class
-@app.route('/classes/<class_id>/register', methods=['POST'])
-def register_student(class_id):
+# Registration Operations
+@app.post("/classes/{class_id}/students/{student_id}")
+def register_student_to_class(class_id: str, student_id: str):
     if class_id not in classes:
-        return jsonify({'error': 'Class not found'}), 404
-    
-    student_id = request.json['student_id']
+        raise HTTPException(status_code=404, detail="Class not found")
     if student_id not in students:
-        return jsonify({'error': 'Student not found'}), 404
+        raise HTTPException(status_code=404, detail="Student not found")
     
     if student_id in registrations[class_id]:
-        return jsonify({'error': 'Already registered'}), 400
+        raise HTTPException(status_code=400, detail="Student already registered in this class")
     
     registrations[class_id].append(student_id)
-    return jsonify({
-        'message': 'Registered successfully',
-        'class': classes[class_id],
-        'student': students[student_id]
-    }), 201
+    return {
+        "message": "Student registered successfully",
+        "class": classes[class_id]["class_name"],
+        "student": f"{students[student_id]['first_name']} {students[student_id]['last_name']}"
+    }
 
-# 8. Get Students in Class
-@app.route('/classes/<class_id>/students', methods=['GET'])
-def get_class_students(class_id):
+@app.get("/classes/{class_id}/students")
+def list_students_in_class(class_id: str):
     if class_id not in classes:
-        return jsonify({'error': 'Class not found'}), 404
+        raise HTTPException(status_code=404, detail="Class not found")
     
-    student_list = [students[sid] for sid in registrations[class_id] if sid in students]
-    return jsonify({
-        'class': classes[class_id],
-        'students': student_list,
-        'total': len(student_list)
-    })
+    registered_students = []
+    for student_id in registrations.get(class_id, []):
+        if student_id in students:
+            registered_students.append(students[student_id])
+    
+    return {
+        "class": classes[class_id]["class_name"],
+        "total_students": len(registered_students),
+        "students": registered_students
+    }
 
-# Helper endpoints
-@app.route('/students', methods=['GET'])
-def get_all_students():
-    return jsonify(list(students.values()))
-
-@app.route('/classes', methods=['GET'])
-def get_all_classes():
-    return jsonify(list(classes.values()))
-
-@app.route('/health', methods=['GET'])
-def health():
-    return jsonify({'status': 'healthy', 'students': len(students), 'classes': len(classes)})
-
-@app.route('/', methods=['GET'])
-def home():
-    return jsonify({
-        'message': 'Student Management API',
-        'endpoints': {
-            'POST /students': 'Create student',
-            'PUT /students/<id>': 'Update student', 
-            'DELETE /students/<id>': 'Delete student',
-            'POST /classes': 'Create class',
-            'PUT /classes/<id>': 'Update class',
-            'DELETE /classes/<id>': 'Delete class',
-            'POST /classes/<id>/register': 'Register student',
-            'GET /classes/<id>/students': 'Get class students'
-        }
-    })
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+@app.get("/")
+def root():
+    return {"message": "Student Management API", "version": "1.0.0"}
